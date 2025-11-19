@@ -2,4 +2,3 @@ pandas
 numpy
 scikit-learn
 scipy
-scikit-surprise==1.1.1    # only for collaborative example (lightweight). If install issues, skip and use sklearn alternatives.
