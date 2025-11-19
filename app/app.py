@@ -1,19 +1,22 @@
-# app/app.py - complete Streamlit app with poster cache + runtime fallback
+# app/app.py - patched (safe ordering + debug)
 from pathlib import Path
 import sys
 import os
+
+# standard imports
+import pandas as pd
 
 # Resolve project root and src folder reliably
 THIS_FILE = Path(__file__).resolve()
 PROJECT_ROOT = THIS_FILE.parents[1]   # one above app/ -> project root
 SRC_DIR = PROJECT_ROOT / "src"
 
-# Make sure src is on sys.path (use resolved absolute path)
+# Ensure src is on sys.path (use resolved absolute path)
 SRC_PATH = str(SRC_DIR.resolve())
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
 
-# Debug: print to Streamlit sidebar later (helps diagnose import problems)
+# Build debug info (safe — uses Path.exists, doesn't import streamlit)
 _debug_info = {
     "project_root": str(PROJECT_ROOT),
     "src_path": SRC_PATH,
@@ -24,38 +27,29 @@ _debug_info = {
     "sys_path_head": sys.path[0:5],
 }
 
-import streamlit as st
-import pandas as pd
-
-# Now import local modules from src (no src. prefix)
+# Safe local imports (these are modules inside src/)
 try:
     from content_based import build_tfidf_matrix, recommend as cb_recommend
     from collaborative import run_cf_sklearn
-    from utils import load_movies, load_ratings, get_poster_for_movie
+    from utils import load_movies, load_ratings, get_poster_for_movie, check_tmdb_key
 except Exception as e:
-    st.set_page_config(page_title="Movie Recommender - Error")
-    st.title("Module import error")
-    st.error("Failed to import local modules from src/. See debug below.")
-    st.exception(e)
-    st.write("Debug info:")
-    for k, v in _debug_info.items():
-        st.write(f"- **{k}**: {v}")
-    st.stop()
+    # Import failure — show a clear error when running with Streamlit
+    try:
+        import streamlit as st
+        st.set_page_config(page_title="Movie Recommender - Error")
+        st.title("Module import error")
+        st.error("Failed to import local modules from src/. See debug below.")
+        st.exception(e)
+        st.write("Debug info:")
+        for k, v in _debug_info.items():
+            st.write(f"- **{k}**: {v}")
+        st.stop()
+    except Exception:
+        # Not running Streamlit (e.g., running unit tests) — re-raise
+        raise
 
-st.set_page_config(page_title="Movie Recommender", layout="centered")
-st.title("🎬 Movie Recommender — Content & Collaborative")
-
-# Show minimal debug in sidebar (will confirm src usage)
-with st.sidebar.expander("Debug info (click)"):
-    for k, v in _debug_info.items():
-        st.write(f"**{k}**: {v}")
-
-# Sidebar
-st.sidebar.header("Settings")
-top_n = st.sidebar.slider("Top N results", 5, 30, 10)
-cb_max_features = st.sidebar.slider("TF-IDF max features", 1000, 10000, 5000, step=500)
-cf_factors = st.sidebar.slider("SVD factors", 10, 200, 50, step=10)
-st.sidebar.write("Put MovieLens ml-latest-small under data/ml-latest-small")
+# Now safe to import Streamlit (after imports above)
+import streamlit as st
 
 # Poster cache (optional)
 POSTER_CACHE = {}
@@ -68,6 +62,29 @@ if POSTER_CACHE_PATH.exists():
     except Exception:
         POSTER_CACHE = {}
 
+# Minimal debug UI (safe)
+st.set_page_config(page_title="Movie Recommender", layout="centered")
+st.title("🎬 Movie Recommender — Content & Collaborative")
+
+with st.sidebar.expander("Debug info (click)"):
+    for k, v in _debug_info.items():
+        st.write(f"**{k}**: {v}")
+
+    # Safe TMDB key check (function provided by utils; won't crash)
+    try:
+        key_present = check_tmdb_key()
+        st.write("TMDB key present?", bool(key_present))
+    except Exception as e:
+        st.write("TMDB key check error:", e)
+
+# Sidebar
+st.sidebar.header("Settings")
+top_n = st.sidebar.slider("Top N results", 5, 30, 10)
+cb_max_features = st.sidebar.slider("TF-IDF max features", 1000, 10000, 5000, step=500)
+cf_factors = st.sidebar.slider("SVD factors", 10, 200, 50, step=10)
+st.sidebar.write("Put MovieLens ml-latest-small under data/ml-latest-small")
+
+# Poster cache usage inside app functions below
 tab1, tab2 = st.tabs(["Content-based", "Collaborative"])
 
 with tab1:
@@ -106,7 +123,7 @@ with tab1:
                     if movie_id is not None:
                         poster = POSTER_CACHE.get(movie_id)
                     if not poster:
-                        poster = get_poster_for_movie(movie_id, title) if title else None
+                        poster = get_poster_for_movie(movie_id, title)
 
                     cols = st.columns([1, 4])
                     with cols[0]:
